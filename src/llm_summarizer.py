@@ -15,7 +15,7 @@ class LLMSummarizer:
             prompt = self._create_summary_prompt(paper)
             
             response = openai.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-o3-mini",
                 messages=[
                     {"role": "system", "content": "あなたは電力・AI・IoT分野の専門研究者です。論文を日本語で分かりやすく要約してください。"},
                     {"role": "user", "content": prompt}
