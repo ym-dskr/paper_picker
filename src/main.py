@@ -28,15 +28,20 @@ def setup_logging() -> logging.Logger:
     戻り値:
         logging.Logger: 設定されたロガーインスタンス
     """
+    # プロジェクトルートのlogsディレクトリパスを取得
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    logs_dir = os.path.join(project_root, 'logs')
+    log_file = os.path.join(logs_dir, 'system.log')
+    
     # logsディレクトリが存在しない場合は作成
-    os.makedirs('logs', exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
     
     # ログ設定
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler('logs/system.log', encoding='utf-8'),
+            logging.FileHandler(log_file, encoding='utf-8'),
             logging.StreamHandler(sys.stdout)
         ]
     )
@@ -104,16 +109,73 @@ def fetch_papers(fetcher: PaperFetcher, config: Config) -> List[Dict]:
         raise PaperFetchError(f"論文取得に失敗しました: {e}") from e
 
 
+def prioritize_papers_by_relevance(
+    summarizer: LLMSummarizer,
+    papers: List[Dict]
+) -> List[Dict]:
+    """電力分野関連度に基づいて論文を優先順位付け
+    
+    引数:
+        summarizer (LLMSummarizer): 関連度評価に使用する要約インスタンス
+        papers (List[Dict]): 評価対象の論文リスト
+        
+    戻り値:
+        List[Dict]: 関連度スコア順にソートされた論文リスト（スコア付き）
+    """
+    logger = logging.getLogger(__name__)
+    
+    if not papers:
+        return []
+    
+    logger.info(f"{len(papers)}件の論文の電力関連度を評価しています...")
+    
+    # 各論文の電力関連度を評価
+    papers_with_score = []
+    for paper in papers:
+        try:
+            relevance_score = summarizer._assess_power_relevance(paper)
+            paper_copy = paper.copy()
+            paper_copy['power_relevance_score'] = relevance_score
+            papers_with_score.append(paper_copy)
+        except Exception as e:
+            logger.warning(f"論文'{paper.get('title', '')[:50]}...'の関連度評価に失敗: {e}")
+            paper_copy = paper.copy()
+            paper_copy['power_relevance_score'] = 0.0
+            papers_with_score.append(paper_copy)
+    
+    # 関連度スコア順（降順）でソート
+    sorted_papers = sorted(
+        papers_with_score, 
+        key=lambda x: x.get('power_relevance_score', 0.0), 
+        reverse=True
+    )
+    
+    # ログ出力：上位5件の関連度スコア
+    top_papers = sorted_papers[:5]
+    logger.info("上位5件の論文関連度スコア:")
+    for i, paper in enumerate(top_papers, 1):
+        score = paper.get('power_relevance_score', 0.0)
+        title = paper.get('title', 'No title')[:60]
+        logger.info(f"  {i}. スコア{score:.3f}: {title}...")
+    
+    # 関連度0.3未満の論文数をログ出力
+    low_relevance_count = sum(1 for p in sorted_papers if p.get('power_relevance_score', 0.0) < 0.3)
+    high_relevance_count = len(sorted_papers) - low_relevance_count
+    logger.info(f"高関連度論文: {high_relevance_count}件, 低関連度論文: {low_relevance_count}件")
+    
+    return sorted_papers
+
+
 def summarize_papers(
     summarizer: LLMSummarizer, 
     papers: List[Dict], 
     max_papers: int
 ) -> List[Dict]:
-    """選択された論文の要約を生成
+    """関連度順に選択された論文の要約を生成
     
     引数:
         summarizer (LLMSummarizer): 要約作成インスタンス
-        papers (List[Dict]): 要約対象の論文
+        papers (List[Dict]): 要約対象の論文（関連度でソート済み想定）
         max_papers (int): 要約する論文の最大数
         
     戻り値:
@@ -124,8 +186,26 @@ def summarize_papers(
     """
     logger = logging.getLogger(__name__)
     
-    # 要約対象論文の選択（max_papersに制限）
-    papers_to_summarize = papers[:max_papers]
+    # 電力関連度順に論文を優先順位付け
+    prioritized_papers = prioritize_papers_by_relevance(summarizer, papers)
+    
+    # 関連度0.3以上の論文から要約対象を選定
+    high_relevance_papers = [
+        p for p in prioritized_papers 
+        if p.get('power_relevance_score', 0.0) >= 0.3
+    ]
+    
+    if not high_relevance_papers:
+        logger.warning("関連度0.3以上の論文が見つかりませんでした。全論文から選定します。")
+        papers_to_summarize = prioritized_papers[:max_papers]
+    else:
+        # 高関連度論文から最大max_papers件を選定
+        papers_to_summarize = high_relevance_papers[:max_papers]
+        logger.info(f"関連度0.3以上の論文{len(high_relevance_papers)}件から上位{len(papers_to_summarize)}件を要約対象に選定")
+    
+    if not papers_to_summarize:
+        logger.warning("要約対象の論文がありません")
+        return []
     
     logger.info(f"{len(papers_to_summarize)}件の論文の要約を開始します...")
     

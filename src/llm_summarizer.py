@@ -57,8 +57,11 @@ class LLMSummarizer:
             paper['summary_generated'] = False
             return paper
         
-        # 電力関連度をチェック
-        power_relevance = self._assess_power_relevance(paper)
+        # 電力関連度をチェック（事前に評価済みの場合はそれを使用）
+        power_relevance = paper.get('power_relevance_score')
+        if power_relevance is None:
+            power_relevance = self._assess_power_relevance(paper)
+        
         if power_relevance < 0.3:  # 関連度が低い場合は要約をスキップ
             self.logger.info(f"電力関連度が低いためスキップ: {paper.get('title', '')[:50]}")
             paper['summary_ja'] = "電力分野への関連度が低いため要約対象外"
@@ -279,7 +282,7 @@ class LLMSummarizer:
         # AI関連キーワードのチェック
         for keyword in ai_keywords:
             if keyword in text:
-                score += 0.4
+                score += 0.3
         
         # スコアを0-1の範囲に正規化
         return min(1.0, score)
