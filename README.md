@@ -189,16 +189,23 @@ paper_picker/
 ### 🎯 Step 2: 電力分野関連度評価
 **担当モジュール**: `llm_summarizer.py` - `_assess_power_relevance()`
 
-1. **キーワードベース評価**
+1. **4段階キーワードベース評価**
    ```python
-   # 高関連度キーワード（重み0.3）
-   ['power forecast', 'demand forecast', 'smart grid', ...]
+   # 最高関連度（重み0.4）- AI×予測×電力融合技術
+   ['ai power forecast', 'machine learning energy prediction', 'smart grid ai', 
+    'generative ai energy', 'iot energy management', 'digital twin energy', ...]
    
-   # 中関連度キーワード（重み0.2）  
-   ['power', 'energy', 'electricity', 'grid', ...]
+   # 高関連度（重み0.3）- 電力予測・IoT特化  
+   ['power forecast', 'renewable energy forecast', 'iot power monitoring',
+    'smart meter', 'real-time power prediction', ...]
    
-   # AI関連キーワード（重み0.3）※変更済み
-   ['machine learning', 'deep learning', 'generative ai', ...]
+   # 中関連度（重み0.2）- AI・予測技術一般
+   ['machine learning', 'deep learning', 'prediction model', 'lstm',
+    'anomaly detection', 'predictive analytics', ...]
+    
+   # IoT基盤（重み0.15）- IoT・技術基盤
+   ['internet of things', 'edge computing', 'sensor network', 
+    'cyber-physical system', 'federated learning', ...]
    ```
 
 2. **スコア計算**
