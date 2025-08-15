@@ -233,7 +233,13 @@ class LLMSummarizer:
         return True
     
     def _assess_power_relevance(self, paper: Dict) -> float:
-        """論文の電力分野関連度を評価
+        """論文のAI・予測・IoT×電力分野関連度を評価
+        
+        4段階のキーワードカテゴリで関連度を評価：
+        - 最高関連度（0.4）: AI×予測×電力の融合技術
+        - 高関連度（0.3）: 電力予測・IoT特化技術  
+        - 中関連度（0.2）: AI・予測技術一般
+        - IoT基盤（0.15）: IoT・技術基盤
         
         引数:
             paper (Dict): 論文データ辞書
@@ -245,44 +251,63 @@ class LLMSummarizer:
         abstract = paper.get('abstract', '').lower()
         text = f"{title} {abstract}"
         
-        # 高関連度キーワード（重み0.3）
+        # 最高関連度キーワード（重み0.4）- AI×予測×電力の融合技術
+        ultra_high_keywords = [
+            'ai power forecast', 'machine learning energy prediction', 'deep learning power forecast',
+            'neural network demand forecast', 'ai renewable energy forecast', 'smart grid ai',
+            'generative ai energy', 'transformer power prediction', 'lstm energy forecast',
+            'reinforcement learning grid', 'iot energy management', 'edge computing power',
+            'digital twin energy', 'ai microgrid', 'federated learning energy'
+        ]
+        
+        # 高関連度キーワード（重み0.3）- 電力予測・IoT特化
         high_priority_keywords = [
             'power forecast', 'demand forecast', 'energy forecast', 'wind power forecast',
             'solar forecast', 'photovoltaic forecast', 'renewable energy forecast',
-            'electricity demand', 'load forecast', 'grid forecast', 'smart grid',
-            'energy management', 'power system', 'electricity market', 'energy storage'
+            'load forecast', 'grid forecast', 'electricity demand forecast',
+            'iot power monitoring', 'smart meter', 'energy iot', 'power iot',
+            'edge ai energy', 'real-time power prediction', 'time series energy'
         ]
         
-        # 中関連度キーワード（重み0.2）
+        # 中関連度キーワード（重み0.2）- AI・予測技術
         medium_priority_keywords = [
-            'power', 'energy', 'electricity', 'grid', 'renewable', 'solar', 'wind',
-            'demand', 'forecast', 'prediction', 'photovoltaic', 'battery', 'storage',
-            'generation', 'load', 'voltage', 'frequency', 'stability', 'optimization'
+            'machine learning', 'deep learning', 'neural network', 'artificial intelligence',
+            'prediction model', 'forecasting model', 'time series prediction',
+            'lstm', 'transformer', 'cnn', 'reinforcement learning', 'generative ai',
+            'anomaly detection', 'pattern recognition', 'optimization algorithm',
+            'data mining', 'predictive analytics', 'computer vision'
         ]
         
-        # AI関連キーワード（重み0.1）
-        ai_keywords = [
-            'machine learning', 'deep learning', 'neural network', 'artificial intelligence',
-            'generative ai', 'transformer', 'lstm', 'cnn', 'reinforcement learning',
-            'time series', 'prediction model', 'forecasting model'
+        # IoT・技術基盤キーワード（重み0.15）
+        iot_tech_keywords = [
+            'internet of things', 'iot', 'edge computing', 'fog computing',
+            'wireless sensor', 'sensor network', 'smart sensor', 'embedded system',
+            'real-time monitoring', 'data acquisition', 'cloud computing',
+            'distributed computing', 'cyber-physical system', 'digital twin',
+            'blockchain energy', 'federated learning', 'edge ai'
         ]
         
         score = 0.0
         
-        # 高関連度キーワードのチェック
+        # 最高関連度キーワードのチェック（AI×予測×電力融合）
+        for keyword in ultra_high_keywords:
+            if keyword in text:
+                score += 0.4
+        
+        # 高関連度キーワードのチェック（電力予測・IoT特化）
         for keyword in high_priority_keywords:
             if keyword in text:
                 score += 0.3
         
-        # 中関連度キーワードのチェック
+        # 中関連度キーワードのチェック（AI・予測技術）
         for keyword in medium_priority_keywords:
             if keyword in text:
                 score += 0.2
         
-        # AI関連キーワードのチェック
-        for keyword in ai_keywords:
+        # IoT・技術基盤キーワードのチェック
+        for keyword in iot_tech_keywords:
             if keyword in text:
-                score += 0.3
+                score += 0.15
         
         # スコアを0-1の範囲に正規化
         return min(1.0, score)
