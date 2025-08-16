@@ -208,6 +208,39 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"論文存在確認エラー: {e}")
             return False
+    
+    def filter_new_papers(self, papers: List[Dict]) -> List[Dict]:
+        """既存論文を除外して新しい論文のみを返す
+        
+        引数:
+            papers (List[Dict]): チェック対象の論文リスト
+            
+        戻り値:
+            List[Dict]: データベースに存在しない新しい論文のリスト
+        """
+        if not papers:
+            return []
+            
+        new_papers = []
+        existing_count = 0
+        
+        for paper in papers:
+            paper_id = paper.get('id')
+            if not paper_id:
+                self.logger.warning("論文IDが見つからないため、スキップします")
+                continue
+                
+            if not self.paper_exists(paper_id):
+                new_papers.append(paper)
+            else:
+                existing_count += 1
+                
+        self.logger.info(
+            f"重複チェック完了: {len(papers)}件中{existing_count}件が既存、"
+            f"{len(new_papers)}件が新規論文"
+        )
+        
+        return new_papers
 
 
 class DatabaseError(Exception):

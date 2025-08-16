@@ -399,6 +399,48 @@ def save_to_database(db_manager: DatabaseManager, papers: List[Dict]) -> None:
         raise DatabaseError(f"データベース操作に失敗しました: {e}") from e
 
 
+def prepare_papers_for_database(
+    all_new_papers: List[Dict],
+    summarized_papers: List[Dict]
+) -> List[Dict]:
+    """データベース保存用に全論文を準備（要約あり・なしを統合）
+    
+    Args:
+        all_new_papers: 新規検出された全論文
+        summarized_papers: 要約済み論文（summary_jaフィールド付き）
+        
+    Returns:
+        データベース保存用の統合論文リスト
+    """
+    logger = logging.getLogger(__name__)
+    
+    # 要約済み論文のIDセットを作成
+    summarized_ids = {p.get('id') for p in summarized_papers if p.get('id')}
+    
+    # 最終的なDB保存用リストを準備
+    papers_for_db = []
+    
+    # まず要約済み論文を追加
+    papers_for_db.extend(summarized_papers)
+    
+    # 要約されていない新規論文を追加（要約フィールドは空）
+    for paper in all_new_papers:
+        paper_id = paper.get('id')
+        if paper_id and paper_id not in summarized_ids:
+            # 要約なし論文用にコピーを作成
+            paper_copy = paper.copy()
+            paper_copy['summary_ja'] = ''  # 要約は空文字
+            papers_for_db.append(paper_copy)
+    
+    logger.info(
+        f"DB保存対象論文: 要約あり{len(summarized_papers)}件, "
+        f"要約なし{len(papers_for_db) - len(summarized_papers)}件, "
+        f"合計{len(papers_for_db)}件"
+    )
+    
+    return papers_for_db
+
+
 def send_notification(
     email_sender: EmailSender,
     summarized_papers: List[Dict],
@@ -460,10 +502,25 @@ def main() -> None:
             send_notification(email_sender, [], [])
             return
         
-        # 論文処理
-        summarized_papers = summarize_papers(summarizer, all_papers, config.MAX_PAPERS, config.USER_KEYWORDS)
-        save_to_database(db_manager, summarized_papers)
-        send_notification(email_sender, summarized_papers, all_papers)
+        # 重複チェック - 既存論文をスキップ
+        logger.info("データベースとの重複チェックを実行しています...")
+        new_papers = db_manager.filter_new_papers(all_papers)
+        
+        if not new_papers:
+            logger.info("新しい論文が見つからなかったため、空の通知を送信します")
+            send_notification(email_sender, [], [])
+            return
+        
+        # 要約対象論文の選定と要約処理
+        summarized_papers = summarize_papers(summarizer, new_papers, config.MAX_PAPERS, config.USER_KEYWORDS)
+        
+        # 全配信対象論文をデータベースに保存（要約対象外も含む）
+        # 要約付き論文と要約なし論文を統合
+        papers_for_db = prepare_papers_for_database(new_papers, summarized_papers)
+        save_to_database(db_manager, papers_for_db)
+        
+        # 通知送信（要約済み論文と全新規論文）
+        send_notification(email_sender, summarized_papers, new_papers)
         
         # 最終統計の記録
         successful_summaries = sum(
