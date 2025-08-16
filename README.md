@@ -73,7 +73,18 @@ RECIPIENT_EMAILS=recipient1@example.com,recipient2@example.com
 # 検索設定
 MAX_PAPERS=30
 SEARCH_KEYWORDS=machine learning,deep learning,prediction,optimization,energy,power
+
+# 日付範囲設定
+# 検索モード: 'days_back' または 'date_range'
+DATE_SEARCH_MODE=days_back
+
+# モード1: 現在から指定日数分さかのぼる場合
 DAYS_BACK=7
+
+# モード2: 日付範囲を指定する場合（YYYY-MM-DD形式）
+# DATE_SEARCH_MODE=date_range の場合のみ有効
+START_DATE=2024-01-01
+END_DATE=2024-12-31
 ```
 
 ### 🔑 設定変更のコツ
@@ -103,9 +114,29 @@ SEARCH_KEYWORDS=machine learning,deep learning,prediction,forecasting,optimizati
 # 例: ['prediction', 'machine learning', 'energy forecasting', 'smart grid', 'optimization']
 ```
 
+#### 日付範囲設定の詳細
+
+**モード1: 日数指定（推奨）**
+```env
+DATE_SEARCH_MODE=days_back
+DAYS_BACK=7  # 過去7日間の論文を検索
+```
+
+**モード2: 日付範囲指定**
+```env
+DATE_SEARCH_MODE=date_range
+START_DATE=2024-01-01  # 検索開始日
+END_DATE=2024-01-31    # 検索終了日
+```
+
+**使い分けのガイドライン:**
+- **日常運用**: `days_back`モード（3-7日推奨）
+- **過去データ収集**: `date_range`モード（特定期間指定）
+- **年次レポート**: `date_range`モード（年間データ）
+
 #### パフォーマンス調整
-- `MAX_PAPERS`: 最終要約論文数（10-30推奨）
-- `DAYS_BACK`: 検索期間（3-7日推奨）
+- `MAX_PAPERS`: 最終要約論文数（5-30推奨）
+- 日付範囲が広いほど処理時間とAPI使用量が増加
 - 初期収集数は自動で200+件（最終数の10倍）
 - 論文数を増やすとOpenAI API使用量が増加
 
@@ -196,6 +227,11 @@ paper_picker/
    - 重複論文の配信を防止
    - ログで重複チェック結果を出力
 
+3. **日付範囲と重複チェックの組み合わせ**
+   - 日付範囲モードでも重複チェックが機能
+   - 過去データ収集時の重複を防止
+   - 効率的な差分更新が可能
+
 ### 🎯 Step 3-7: 多段階フィルタリングシステム
 **担当モジュール**: `paper_fetcher.py` - `_apply_multi_stage_filtering()`
 
@@ -208,8 +244,10 @@ paper_picker/
 - ユニークな論文のみを保持
 
 #### Stage 3: 日付フィルタ
-- 過去`DAYS_BACK`日以内の論文に絞り込み
-- 古い論文を除外して処理効率を向上
+- 設定された日付範囲内の論文に絞り込み
+- `days_back`モード: 過去指定日数以内の論文
+- `date_range`モード: 指定された期間内の論文
+- 範囲外の論文を除外して処理効率を向上
 
 #### Stage 4: 関連度による第1次絞り込み
 - **6要素関連度スコア算出**（0-100点）：
@@ -375,9 +413,11 @@ DB保存論文総数: 198件
 |---------|-------------|--------|---------------|
 | `SEARCH_KEYWORDS` | Stage1の初期検索範囲 | 幅広いキーワード | 大量収集戦略で検索範囲拡大 |
 | `USER_KEYWORDS` | Stage4-6の関連度評価 | 特化したキーワード | バランス選択とフィルタリング |
-| `DAYS_BACK` | Stage3の日付フィルタ | 3-7日 | 効率的な期間絞り込み |
-| `MAX_PAPERS` | Stage6の最終選択数 | 10-30件 | 多段階フィルタ後の出力数 |
-| OpenAI APIキー | Step7の要約品質 | 有効なキー | 重要度ベース適応的要約 |
+| `DATE_SEARCH_MODE` | 日付範囲決定方式 | `days_back` | 日常運用 vs 過去データ収集 |
+| `DAYS_BACK` | days_backモードの期間 | 3-7日 | 効率的な期間絞り込み |
+| `START_DATE/END_DATE` | date_rangeモードの期間 | 必要な期間 | 過去データの柔軟な収集 |
+| `MAX_PAPERS` | Stage6の最終選択数 | 5-30件 | 多段階フィルタ後の出力数 |
+| OpenAI APIキー | Step8の要約品質 | 有効なキー | 重要度ベース適応的要約 |
 
 ### 🚀 システムの革新ポイント
 
@@ -444,7 +484,10 @@ echo 'export PYTHONIOENCODING=utf-8' >> ~/.bashrc
 #### 6. 論文が見つからない
 - インターネット接続を確認
 - 検索キーワードを調整
-- `DAYS_BACK` を増加（より長期間を検索）
+- 日付範囲を調整:
+  - `days_back`モード: `DAYS_BACK`を増加（より長期間を検索）
+  - `date_range`モード: 期間を拡大または最近の日付に変更
+- `DATE_SEARCH_MODE`の設定値を確認
 
 ### ログの確認
 ```bash
@@ -488,17 +531,39 @@ categories = [
 - DB保存論文総数（要約あり・なしの内訳）
 - 高優先度論文数
 
-## 🔧 新機能：重複チェックとデータベース管理
+## 🔧 新機能：日付範囲モードと重複チェック
+
+### 柔軟な日付範囲検索
+- **days_backモード**: 従来の日数指定方式（日常運用推奨）
+- **date_rangeモード**: 特定期間指定方式（過去データ収集用）
+- **効果**: 過去の論文の効率的な収集、年次レポート作成に対応
 
 ### データベース重複チェック機能
 - **効果**: 既存論文の再処理を防ぎ、API使用量を大幅削減
 - **仕組み**: 論文IDベースでデータベースと照合、新規論文のみ処理
-- **設定**: 自動動作（設定変更不要）
+- **date_rangeモード対応**: 過去データ収集時の重複も防止
 
 ### 全論文データベース保存
 - **要約対象論文**: `summary_ja`フィールドに日本語要約を保存
 - **要約対象外論文**: `summary_ja`フィールドは空文字で保存
 - **履歴管理**: 全配信論文の完全な追跡が可能
+
+### 使用例
+```bash
+# 日常運用（過去1週間）
+DATE_SEARCH_MODE=days_back
+DAYS_BACK=7
+
+# 年次レポート用（2024年全体）
+DATE_SEARCH_MODE=date_range
+START_DATE=2024-01-01
+END_DATE=2024-12-31
+
+# 特定イベント期間の論文収集
+DATE_SEARCH_MODE=date_range
+START_DATE=2024-06-01
+END_DATE=2024-06-30
+```
 
 ### メンテナンス
 ```bash
@@ -507,5 +572,8 @@ ls -lh data/papers.db
 
 # 古いレコードの手動削除（必要に応じて）
 sqlite3 data/papers.db "DELETE FROM papers WHERE processed_at < DATE('now', '-365 days');"
+
+# 日付範囲でのデータ確認
+sqlite3 data/papers.db "SELECT COUNT(*), MIN(published), MAX(published) FROM papers;"
 ```
 

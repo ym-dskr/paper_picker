@@ -335,7 +335,7 @@ class PaperFetcher:
         return balanced_papers
     
     def _fetch_papers_for_keyword(self, keyword: str, max_results: int) -> List[Dict]:
-        """単一キーワードでの論文取得（シンプルなキーワード検索）.
+        """単一キーワードでの論文取得（日付範囲を考慮したキーワード検索）.
         
         Args:
             keyword: 検索キーワード
@@ -344,22 +344,65 @@ class PaperFetcher:
         Returns:
             論文辞書のリスト
         """
-        # シンプルなキーワード検索（タイトル、アブストラクト、カテゴリのいずれかに含まれる）
-        query = f'all:{keyword}'
-        
-        search = arxiv.Search(
-            query=query,
-            max_results=max_results * 2,  # フィルタリングを考慮して余分に取得
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending
-        )
-        
-        papers = []
-        for paper in search.results():
-            paper_data = self._convert_arxiv_paper(paper, keyword)
-            papers.append(paper_data)
+        try:
+            # 設定から日付範囲を取得
+            start_date, end_date = self.config.get_date_range()
+            self.logger.info(
+                f"キーワード'{keyword}': {start_date.strftime('%Y-%m-%d')} ～ "
+                f"{end_date.strftime('%Y-%m-%d')} の期間で検索"
+            )
+            
+            # シンプルなキーワード検索（タイトル、アブストラクト、カテゴリのいずれかに含まれる）
+            query = f'all:{keyword}'
+            
+            search = arxiv.Search(
+                query=query,
+                max_results=max_results * 3,  # 日付フィルタリングを考慮して余分に取得
+                sort_by=arxiv.SortCriterion.SubmittedDate,
+                sort_order=arxiv.SortOrder.Descending
+            )
+            
+            papers = []
+            for paper in search.results():
+                # 日付範囲チェック
+                if self._is_paper_in_date_range(paper, start_date, end_date):
+                    paper_data = self._convert_arxiv_paper(paper, keyword)
+                    papers.append(paper_data)
+                    
+                    # 必要な件数に達したら終了
+                    if len(papers) >= max_results:
+                        break
                         
-        return papers
+            return papers
+            
+        except ValueError as e:
+            self.logger.error(f"日付設定エラー: {e}")
+            raise PaperFetchError(f"日付設定が無効です: {e}") from e
+    
+    def _is_paper_in_date_range(self, paper, start_date: datetime, end_date: datetime) -> bool:
+        """論文が指定された日付範囲内にあるかチェック.
+        
+        Args:
+            paper: arXiv論文オブジェクト
+            start_date: 検索開始日（UTC）
+            end_date: 検索終了日（UTC）
+            
+        Returns:
+            日付範囲内の場合True、そうでなければFalse
+        """
+        try:
+            # arXivの論文の投稿日を取得（UTC）
+            paper_date = paper.published
+            
+            # タイムゾーンナイーブなdatetimeに変換（UTC想定）
+            if paper_date.tzinfo is not None:
+                paper_date = paper_date.replace(tzinfo=None)
+            
+            return start_date <= paper_date <= end_date
+            
+        except Exception as e:
+            self.logger.warning(f"論文日付の解析に失敗: {e}")
+            return False  # 日付が不明な場合は除外
     
     def _convert_arxiv_paper(self, paper, keyword: str) -> Dict:
         """arXiv論文オブジェクトを辞書形式に変換.
@@ -759,29 +802,35 @@ class PaperFetcher:
             return 50.0  # デフォルト値
     
     def _filter_recent_papers(self, papers: List[Dict]) -> List[Dict]:
-        """最新の論文のみにフィルタリング.
+        """設定された日付範囲内の論文のみにフィルタリング.
         
         Args:
             papers: 論文辞書のリスト
             
         Returns:
-            フィルタリングされた最新論文のリスト
+            フィルタリングされた論文のリスト
         """
-        cutoff_date = datetime.now() - timedelta(days=self.config.DAYS_BACK)
-        recent_papers = []
-        
-        for paper in papers:
-            try:
-                published_date = datetime.strptime(paper['published'], '%Y-%m-%d')
-                if published_date >= cutoff_date:
-                    recent_papers.append(paper)
-            except (ValueError, KeyError) as e:
-                self.logger.warning(
-                    f"論文{paper.get('id', 'unknown')}の日付形式が無効です: {e}"
-                )
-                continue
+        try:
+            start_date, end_date = self.config.get_date_range()
+            recent_papers = []
+            
+            for paper in papers:
+                try:
+                    published_date = datetime.strptime(paper['published'], '%Y-%m-%d')
+                    if start_date <= published_date <= end_date:
+                        recent_papers.append(paper)
+                except (ValueError, KeyError) as e:
+                    self.logger.warning(
+                        f"論文{paper.get('id', 'unknown')}の日付形式が無効です: {e}"
+                    )
+                    continue
                 
-        return recent_papers
+            return recent_papers
+            
+        except ValueError as e:
+            self.logger.error(f"日付範囲設定エラー: {e}")
+            # エラー時は元のリストをそのまま返す
+            return papers
     
     def _remove_duplicates(self, papers: List[Dict]) -> List[Dict]:
         """論文IDに基づく重複論文の除去.
