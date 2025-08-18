@@ -9,7 +9,7 @@ import logging
 import sys
 import os
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # カスタムモジュールのインポート
 from config import Config
@@ -171,7 +171,7 @@ def filter_papers_by_keywords(
     return filtered_papers
 
 
-def get_recency_score(published_date: str) -> float:
+def calculate_paper_recency_score(published_date: str) -> float:
     """論文の新しさをスコア化（0-100）."""
     try:
         from datetime import datetime
@@ -213,33 +213,98 @@ def select_balanced_papers(
     """
     logger = logging.getLogger(__name__)
     
+    # 早期リターン条件
     if len(papers) <= max_papers:
         return papers
-    
     if not keywords:
         return papers[:max_papers]
     
-    # 各キーワードにマッチする論文を分類
+    # キーワード別に論文を分類
+    keyword_papers, unmatched_papers = _classify_papers_by_keywords(papers, keywords)
+    
+    # 各キーワードから選択
+    selected_papers = _select_papers_from_keywords(
+        keyword_papers, keywords, max_papers, logger
+    )
+    
+    # 残りスロットを埋める
+    if len(selected_papers) < max_papers:
+        selected_papers = _fill_remaining_slots(
+            selected_papers, keyword_papers, unmatched_papers, max_papers
+        )
+    
+    # 結果をログ出力
+    _log_selection_statistics(selected_papers, logger)
+    
+    logger.info(f"キーワードバランスを考慮して{len(selected_papers)}件を選択しました")
+    return selected_papers
+
+
+def _classify_papers_by_keywords(
+    papers: List[Dict], 
+    keywords: List[str]
+) -> tuple[Dict[str, List[Dict]], List[Dict]]:
+    """論文をキーワード別に分類.
+    
+    Args:
+        papers: 論文リスト
+        keywords: キーワードリスト
+        
+    Returns:
+        キーワード別論文辞書と未分類論文リストのタプル
+    """
     keyword_papers = {keyword: [] for keyword in keywords}
     unmatched_papers = []
     
     for paper in papers:
-        title = paper.get('title', '').lower()
-        abstract = paper.get('abstract', '').lower()
-        text = f"{title} {abstract}"
+        matched_keyword = _find_first_matching_keyword(paper, keywords)
         
-        matched_keywords = []
-        for keyword in keywords:
-            if keyword.lower() in text:
-                matched_keywords.append(keyword)
-        
-        if matched_keywords:
-            # 最初にマッチしたキーワードに分類
-            keyword_papers[matched_keywords[0]].append(paper)
+        if matched_keyword:
+            keyword_papers[matched_keyword].append(paper)
         else:
             unmatched_papers.append(paper)
     
-    # 各キーワードから均等に選択
+    return keyword_papers, unmatched_papers
+
+
+def _find_first_matching_keyword(paper: Dict, keywords: List[str]) -> Optional[str]:
+    """論文に最初にマッチするキーワードを見つける.
+    
+    Args:
+        paper: 論文データ
+        keywords: キーワードリスト
+        
+    Returns:
+        最初にマッチしたキーワード、なければNone
+    """
+    title = paper.get('title', '').lower()
+    abstract = paper.get('abstract', '').lower()
+    text = f"{title} {abstract}"
+    
+    for keyword in keywords:
+        if keyword.lower() in text:
+            return keyword
+    
+    return None
+
+
+def _select_papers_from_keywords(
+    keyword_papers: Dict[str, List[Dict]], 
+    keywords: List[str], 
+    max_papers: int, 
+    logger
+) -> List[Dict]:
+    """各キーワードから論文を選択.
+    
+    Args:
+        keyword_papers: キーワード別論文辞書
+        keywords: キーワードリスト
+        max_papers: 最大論文数
+        logger: ロガー
+        
+    Returns:
+        選択された論文リスト
+    """
     papers_per_keyword = max(1, max_papers // len(keywords))
     selected_papers = []
     remaining_slots = max_papers
@@ -247,63 +312,101 @@ def select_balanced_papers(
     for keyword in keywords:
         available_papers = keyword_papers[keyword]
         if available_papers and remaining_slots > 0:
-            # 関連度、重要度、新しさを組み合わせてソート
-            available_papers.sort(
-                key=lambda x: (
-                    x.get('relevance_score', 0) * 0.5 +    # 関連度50%
-                    x.get('importance_score', 0) * 0.3 +   # 重要度30%
-                    get_recency_score(x.get('published', '')) * 0.2  # 新しさ20%
-                ), 
-                reverse=True
-            )
-            take_count = min(papers_per_keyword, len(available_papers), remaining_slots)
-            selected_papers.extend(available_papers[:take_count])
+            # スコアでソート
+            sorted_papers = _sort_papers_by_combined_score(available_papers)
+            
+            take_count = min(papers_per_keyword, len(sorted_papers), remaining_slots)
+            selected_papers.extend(sorted_papers[:take_count])
             remaining_slots -= take_count
             
             logger.debug(f"キーワード'{keyword}': {take_count}件選択（重要度考慮）")
     
-    # 残りスロットがあれば、他の論文で埋める
-    if remaining_slots > 0:
-        remaining_papers = []
-        for keyword_list in keyword_papers.values():
-            remaining_papers.extend(keyword_list)
-        remaining_papers.extend(unmatched_papers)
-        
-        # 既に選択済みの論文を除外
-        selected_ids = {p.get('id') for p in selected_papers}
-        additional_papers = [
-            p for p in remaining_papers 
-            if p.get('id') not in selected_ids
-        ]
-        
-        # 関連度と重要度で残りスロットを埋める
-        additional_papers.sort(
-            key=lambda x: (
-                x.get('relevance_score', 0) * 0.5 +    # 関連度50%
-                x.get('importance_score', 0) * 0.3 +   # 重要度30%
-                get_recency_score(x.get('published', '')) * 0.2  # 新しさ20%
-            ),
-            reverse=True
-        )
-        selected_papers.extend(additional_papers[:remaining_slots])
-    
-    # 選択された論文のスコア分布をログ出力
-    if selected_papers:
-        avg_relevance = sum(p.get('relevance_score', 0) for p in selected_papers) / len(selected_papers)
-        avg_importance = sum(p.get('importance_score', 0) for p in selected_papers) / len(selected_papers)
-        max_relevance = max(p.get('relevance_score', 0) for p in selected_papers)
-        max_importance = max(p.get('importance_score', 0) for p in selected_papers)
-        high_relevance_count = sum(1 for p in selected_papers if p.get('relevance_score', 0) >= 70)
-        
-        logger.info(
-            f"選択論文スコア分布: "
-            f"関連度平均{avg_relevance:.1f}(最高{max_relevance:.1f}), "
-            f"重要度平均{avg_importance:.1f}(最高{max_importance:.1f}), "
-            f"高関連度論文{high_relevance_count}件"
-        )
-    
-    logger.info(f"キーワードバランスを考慮して{len(selected_papers)}件を選択しました")
     return selected_papers
+
+
+def _sort_papers_by_combined_score(papers: List[Dict]) -> List[Dict]:
+    """論文を複合スコアでソート.
+    
+    Args:
+        papers: 論文リスト
+        
+    Returns:
+        ソート済み論文リスト
+    """
+    return sorted(
+        papers,
+        key=lambda x: (
+            x.get('relevance_score', 0) * 0.5 +    # 関連度50%
+            x.get('importance_score', 0) * 0.3 +   # 重要度30%
+            calculate_paper_recency_score(x.get('published', '')) * 0.2  # 新しさ20%
+        ), 
+        reverse=True
+    )
+
+
+def _fill_remaining_slots(
+    selected_papers: List[Dict],
+    keyword_papers: Dict[str, List[Dict]],
+    unmatched_papers: List[Dict],
+    max_papers: int
+) -> List[Dict]:
+    """残りスロットを追加論文で埋める.
+    
+    Args:
+        selected_papers: 既に選択された論文
+        keyword_papers: キーワード別論文辞書
+        unmatched_papers: 未分類論文
+        max_papers: 最大論文数
+        
+    Returns:
+        追加論文を含む論文リスト
+    """
+    remaining_slots = max_papers - len(selected_papers)
+    if remaining_slots <= 0:
+        return selected_papers
+    
+    # 残りの論文を集める
+    remaining_papers = []
+    for keyword_list in keyword_papers.values():
+        remaining_papers.extend(keyword_list)
+    remaining_papers.extend(unmatched_papers)
+    
+    # 既に選択済みの論文を除外
+    selected_ids = {p.get('id') for p in selected_papers}
+    additional_papers = [
+        p for p in remaining_papers 
+        if p.get('id') not in selected_ids
+    ]
+    
+    # スコアでソートして追加
+    sorted_additional = _sort_papers_by_combined_score(additional_papers)
+    selected_papers.extend(sorted_additional[:remaining_slots])
+    
+    return selected_papers
+
+
+def _log_selection_statistics(selected_papers: List[Dict], logger) -> None:
+    """選択された論文の統計情報をログ出力.
+    
+    Args:
+        selected_papers: 選択された論文リスト
+        logger: ロガーインスタンス
+    """
+    if not selected_papers:
+        return
+    
+    avg_relevance = sum(p.get('relevance_score', 0) for p in selected_papers) / len(selected_papers)
+    avg_importance = sum(p.get('importance_score', 0) for p in selected_papers) / len(selected_papers)
+    max_relevance = max(p.get('relevance_score', 0) for p in selected_papers)
+    max_importance = max(p.get('importance_score', 0) for p in selected_papers)
+    high_relevance_count = sum(1 for p in selected_papers if p.get('relevance_score', 0) >= 70)
+    
+    logger.info(
+        f"選択論文スコア分布: "
+        f"関連度平均{avg_relevance:.1f}(最高{max_relevance:.1f}), "
+        f"重要度平均{avg_importance:.1f}(最高{max_importance:.1f}), "
+        f"高関連度論文{high_relevance_count}件"
+    )
 
 
 def summarize_papers(
